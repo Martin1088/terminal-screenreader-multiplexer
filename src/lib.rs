@@ -1,18 +1,64 @@
-mod accesskit_windows;
+pub mod platform;
+
 use accesskit::{
-    Node, NodeId, Role, TextPosition, TextSelection, Tree, TreeUpdate,
+    Action, ActionData, ActionHandler, ActionRequest, Node, NodeId, Role, TextPosition,
+    TextSelection, Tree, TreeId, TreeUpdate,
 };
+use std::sync::mpsc::Sender;
 use unicode_segmentation::UnicodeSegmentation;
 
 const ROOT: NodeId = NodeId(0);
 const TERM: NodeId = NodeId(1);
 const LINE_BASE: u64 = 100; // Zeile i => NodeId(LINE_BASE + i)
 
-struct A11y {
-    adapter: accesskit_windows::Adapter,
+pub enum AppEvent {
+    RouteTo { line: usize, grapheme_col: usize },
+}
+
+/// Translates AccessKit `ActionRequest`s (routing-key presses, forwarded by
+/// the screen reader as `Action::SetTextSelection`) into `AppEvent`s.
+/// Runs on whatever thread the platform adapter calls it on, so it only
+/// ever pushes onto a channel rather than touching app state directly.
+pub struct RoutingActionHandler {
+    tx: Sender<AppEvent>,
+}
+
+impl RoutingActionHandler {
+    pub fn new(tx: Sender<AppEvent>) -> Self {
+        Self { tx }
+    }
+}
+
+impl ActionHandler for RoutingActionHandler {
+    fn do_action(&mut self, request: ActionRequest) {
+        if request.action != Action::SetTextSelection {
+            return;
+        }
+        let Some(ActionData::SetTextSelection(selection)) = request.data else {
+            return;
+        };
+        let node_id = selection.focus.node.0;
+        if node_id < LINE_BASE {
+            return;
+        }
+        let _ = self.tx.send(AppEvent::RouteTo {
+            line: (node_id - LINE_BASE) as usize,
+            grapheme_col: selection.focus.character_index,
+        });
+    }
+}
+
+pub struct A11y {
+    adapter: platform::Adapter,
 }
 
 impl A11y {
+    pub fn new(action_tx: Sender<AppEvent>) -> Self {
+        Self {
+            adapter: platform::Adapter::new(RoutingActionHandler::new(action_tx)),
+        }
+    }
+
     fn line_id(i: usize) -> NodeId {
         NodeId(LINE_BASE + i as u64)
     }
@@ -20,12 +66,7 @@ impl A11y {
     fn build_line(text: &str) -> Node {
         let mut n = Node::new(Role::TextRun);
         n.set_value(text.to_string());
-        // Graphem-Cluster statt chars(): ein Eintrag pro
-        // sichtbarem Zeichen, korrekt für Umlaute/Emojis
-        let lengths: Vec<u8> = text
-            .graphemes(true)
-            .map(|g| g.len() as u8)
-            .collect();
+        let lengths: Vec<u8> = text.graphemes(true).map(|g| g.len() as u8).collect();
         n.set_character_lengths(lengths);
         n
     }
@@ -34,15 +75,11 @@ impl A11y {
         &self,
         lines: &[String],
         cursor_line: usize,
-        cursor_col: usize, // in Graphemen, nicht Bytes!
+        cursor_col: usize,
     ) -> TreeUpdate {
         let mut term = Node::new(Role::Terminal);
-        term.set_children(
-            (0..lines.len()).map(Self::line_id).collect::<Vec<_>>(),
-        );
+        term.set_children((0..lines.len()).map(Self::line_id).collect::<Vec<_>>());
 
-        // Caret = kollabierte Selektion auf der aktiven Zeile.
-        // DAS ist der Auslöser für Sprach- UND Braille-Update.
         let pos = TextPosition {
             node: Self::line_id(cursor_line),
             character_index: cursor_col,
@@ -66,17 +103,12 @@ impl A11y {
         TreeUpdate {
             nodes,
             tree: Some(Tree::new(ROOT)),
-            focus: TERM, // Fokus auf dem Terminal-Node:
-            // SR verfolgt dessen Caret
+            tree_id: TreeId::ROOT,
+            focus: TERM,
         }
     }
 
-    fn on_cursor_moved(
-        &mut self,
-        lines: &[String],
-        cursor_line: usize,
-        cursor_col: usize,
-    ) {
+    pub fn on_cursor_moved(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
         let update = self.build_update(lines, cursor_line, cursor_col);
         self.adapter.update_if_active(|| update);
     }
