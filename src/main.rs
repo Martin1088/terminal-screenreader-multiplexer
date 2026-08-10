@@ -7,116 +7,13 @@ use crossterm::{
         LeaveAlternateScreen,
     },
 };
-use std::collections::BTreeSet;
 use std::io::{stdout, Write};
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
-use terminal_screenreader_multiplexer::{
-    classify_line, A11y, AppEvent, Key, LineClass, Tones, TONE_ACTIVITY, TONE_BOOKMARK_REMOVED,
-    TONE_BOOKMARK_SET, TONE_ERROR, TONE_LAYER_OFF, TONE_LAYER_ON, TONE_NO_BOOKMARKS, TONE_WARNING,
-};
+use terminal_screenreader_multiplexer::{A11y, AppEvent, CopyMode, Key, Tones, TONE_ACTIVITY};
 
 const MAX_LINES: usize = 200;
 const OUTPUT_EVERY: Duration = Duration::from_millis(2500);
-
-struct CopyMode {
-    cursor_line: usize,
-    cursor_col: usize,
-    top: usize,
-    view_height: usize,
-    running: bool,
-    layer: bool,
-    bookmarks: BTreeSet<usize>,
-    status: String,
-}
-
-impl CopyMode {
-    /// Moves the cursor, scrolls the view along, and sounds the error/
-    /// warning tone when landing on a matching line.
-    fn move_cursor(&mut self, line: usize, col: usize, lines: &[String], tones: &Tones) {
-        let line = line.min(lines.len().saturating_sub(1));
-        let changed = line != self.cursor_line;
-        self.cursor_line = line;
-        self.cursor_col = col;
-        if self.cursor_line < self.top {
-            self.top = self.cursor_line;
-        } else if self.cursor_line >= self.top + self.view_height {
-            self.top = self.cursor_line + 1 - self.view_height;
-        }
-        if changed {
-            match classify_line(&lines[self.cursor_line]) {
-                LineClass::Error => tones.play(TONE_ERROR),
-                LineClass::Warning => tones.play(TONE_WARNING),
-                LineClass::Plain => {}
-            }
-        }
-    }
-
-    fn toggle_bookmark(&mut self, lines: &[String], tones: &Tones) {
-        if self.bookmarks.remove(&self.cursor_line) {
-            self.status = format!("Lesezeichen entfernt: {}", lines[self.cursor_line]);
-            tones.play(TONE_BOOKMARK_REMOVED);
-        } else {
-            self.bookmarks.insert(self.cursor_line);
-            self.status = format!("Lesezeichen gesetzt: {}", lines[self.cursor_line]);
-            tones.play(TONE_BOOKMARK_SET);
-        }
-    }
-
-    fn jump_bookmark(&mut self, forward: bool, lines: &[String], tones: &Tones) {
-        let target = if forward {
-            self.bookmarks
-                .range(self.cursor_line + 1..)
-                .next()
-                .or_else(|| self.bookmarks.iter().next())
-        } else {
-            self.bookmarks
-                .range(..self.cursor_line)
-                .next_back()
-                .or_else(|| self.bookmarks.iter().next_back())
-        }
-        .copied();
-        match target {
-            Some(line) => self.move_cursor(line, 0, lines, tones),
-            None => {
-                self.status = "Keine Lesezeichen".to_string();
-                tones.play(TONE_NO_BOOKMARKS);
-            }
-        }
-    }
-
-    fn apply_key(&mut self, key: Key, lines: &[String], tones: &Tones) {
-        match key {
-            Key::Down => {
-                if self.cursor_line + 1 < lines.len() {
-                    self.move_cursor(self.cursor_line + 1, 0, lines, tones);
-                }
-            }
-            Key::Up => {
-                if self.cursor_line > 0 {
-                    self.move_cursor(self.cursor_line - 1, 0, lines, tones);
-                }
-            }
-            Key::Exit => self.running = false, // Copy-Mode verlassen
-            Key::ToggleLayer => {
-                self.layer = !self.layer;
-                if self.layer {
-                    self.status = "Befehlsebene ein".to_string();
-                    tones.play(TONE_LAYER_ON);
-                } else {
-                    self.status = "Befehlsebene aus".to_string();
-                    tones.play(TONE_LAYER_OFF);
-                }
-            }
-            // Einzeltasten-Befehle gelten nur bei aktiver Befehlsebene; sonst
-            // würden sie in einem echten Multiplexer an die Shell gehen.
-            Key::ToggleBookmark if self.layer => self.toggle_bookmark(lines, tones),
-            Key::NextBookmark if self.layer => self.jump_bookmark(true, lines, tones),
-            Key::PrevBookmark if self.layer => self.jump_bookmark(false, lines, tones),
-            Key::ToggleBookmark | Key::NextBookmark | Key::PrevBookmark => {}
-        }
-    }
-}
 
 fn activity_debounce() -> Duration {
     let ms = std::env::var("TSM_ACTIVITY_DEBOUNCE_MS")
@@ -141,17 +38,7 @@ fn main() -> std::io::Result<()> {
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen)?;
 
-    let mut mode = CopyMode {
-        cursor_line: 0,
-        cursor_col: 0,
-        top: 0,
-        view_height: 20,
-        running: true,
-        layer: false,
-        bookmarks: BTreeSet::new(),
-        status: String::new(),
-    };
-
+    let mut mode = CopyMode::new(20);
     let mut last_output = Instant::now();
     let mut last_activity_tone: Option<Instant> = None;
 
@@ -206,7 +93,7 @@ fn main() -> std::io::Result<()> {
                 KeyCode::Down => Some(Key::Down),
                 KeyCode::Up => Some(Key::Up),
                 KeyCode::Esc | KeyCode::F(2) => Some(Key::Exit),
-                KeyCode::F(1) => Some(Key::ToggleLayer),
+                KeyCode::F(1) => Some(Key::Prefix),
                 KeyCode::Char('m' | 'M') => Some(Key::ToggleBookmark),
                 KeyCode::Char('n' | 'N') => Some(Key::NextBookmark),
                 KeyCode::Char('p' | 'P') => Some(Key::PrevBookmark),

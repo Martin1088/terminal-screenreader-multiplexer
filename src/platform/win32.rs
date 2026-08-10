@@ -75,7 +75,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     VK_UP => Some(Key::Up),
                     VK_DOWN => Some(Key::Down),
                     VK_ESCAPE | VK_F2 => Some(Key::Exit),
-                    VK_F1 => Some(Key::ToggleLayer),
+                    VK_F1 => Some(Key::Prefix),
                     VK_M => Some(Key::ToggleBookmark),
                     VK_N => Some(Key::NextBookmark),
                     VK_P => Some(Key::PrevBookmark),
@@ -173,8 +173,8 @@ fn create_window() -> HWND {
 /// that's what makes screen readers query *our* AccessKit tree (with its text
 /// selection and routing-key handling) instead of reading the console
 /// natively. Copy-mode keys pressed while it has focus (`Up`/`Down`/`Esc`/
-/// `F2`, plus `F1` and the command-layer keys `m`/`n`/`p`) are forwarded to
-/// the app as `AppEvent::Key`; everything else is ignored. On drop,
+/// `F2`, plus the `F1` prefix and its command keys `m`/`n`/`p`) are forwarded
+/// to the app as `AppEvent::Key`; everything else is ignored. On drop,
 /// foreground goes back to the console window.
 pub struct Adapter {
     hwnd: HWND,

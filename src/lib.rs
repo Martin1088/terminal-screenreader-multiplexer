@@ -1,11 +1,13 @@
+mod copy_mode;
 pub mod platform;
 mod scan;
 mod tones;
 
+pub use copy_mode::CopyMode;
 pub use scan::{classify_line, LineClass};
 pub use tones::{
     Tone, Tones, TONE_ACTIVITY, TONE_BOOKMARK_REMOVED, TONE_BOOKMARK_SET, TONE_ERROR,
-    TONE_LAYER_OFF, TONE_LAYER_ON, TONE_NO_BOOKMARKS, TONE_WARNING,
+    TONE_NO_BOOKMARKS, TONE_PREFIX_ARMED, TONE_PREFIX_CANCELLED, TONE_WARNING,
 };
 
 use accesskit::{
@@ -33,13 +35,13 @@ pub enum Key {
     Up,
     Down,
     Exit,
-    /// Befehlsebene ein-/ausschalten (F1).
-    ToggleLayer,
-    /// `m` — Lesezeichen auf der Cursorzeile setzen/entfernen (nur Befehlsebene).
+    /// Präfix-Taste (F1, tmux-Stil): die nächste Taste ist ein Befehl.
+    Prefix,
+    /// `m` — Lesezeichen auf der Cursorzeile setzen/entfernen (nach Präfix).
     ToggleBookmark,
-    /// `n` — zum nächsten Lesezeichen springen (nur Befehlsebene).
+    /// `n` — zum nächsten Lesezeichen springen (nach Präfix).
     NextBookmark,
-    /// `p` — zum vorherigen Lesezeichen springen (nur Befehlsebene).
+    /// `p` — zum vorherigen Lesezeichen springen (nach Präfix).
     PrevBookmark,
 }
 

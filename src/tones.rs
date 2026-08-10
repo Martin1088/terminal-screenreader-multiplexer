@@ -19,8 +19,8 @@ pub const TONE_ERROR: &[Tone] = &[t(220, 120)];
 pub const TONE_WARNING: &[Tone] = &[t(440, 90)];
 /// Zwei aufsteigende Töne bei neuer Ausgabe.
 pub const TONE_ACTIVITY: &[Tone] = &[t(880, 60), t(1175, 60)];
-pub const TONE_LAYER_ON: &[Tone] = &[t(1319, 50)];
-pub const TONE_LAYER_OFF: &[Tone] = &[t(659, 50)];
+pub const TONE_PREFIX_ARMED: &[Tone] = &[t(1319, 50)];
+pub const TONE_PREFIX_CANCELLED: &[Tone] = &[t(659, 50)];
 pub const TONE_BOOKMARK_SET: &[Tone] = &[t(1047, 60)];
 pub const TONE_BOOKMARK_REMOVED: &[Tone] = &[t(523, 60)];
 pub const TONE_NO_BOOKMARKS: &[Tone] = &[t(330, 80)];
