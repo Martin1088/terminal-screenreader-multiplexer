@@ -13,6 +13,17 @@ const LINE_BASE: u64 = 100; // Zeile i => NodeId(LINE_BASE + i)
 
 pub enum AppEvent {
     RouteTo { line: usize, grapheme_col: usize },
+    /// A copy-mode key pressed while the accessibility bridge window has
+    /// focus (Windows only); the console doesn't receive keystrokes then,
+    /// so the bridge forwards them here.
+    Key(Key),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Up,
+    Down,
+    Exit,
 }
 
 /// Translates AccessKit `ActionRequest`s (routing-key presses, forwarded by
@@ -55,7 +66,10 @@ pub struct A11y {
 impl A11y {
     pub fn new(action_tx: Sender<AppEvent>) -> Self {
         Self {
-            adapter: platform::Adapter::new(RoutingActionHandler::new(action_tx)),
+            adapter: platform::Adapter::new(
+                RoutingActionHandler::new(action_tx.clone()),
+                action_tx,
+            ),
         }
     }
 

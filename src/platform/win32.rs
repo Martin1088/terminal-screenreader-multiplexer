@@ -1,3 +1,4 @@
+use crate::{AppEvent, Key};
 use accesskit::{ActionHandler, ActivationHandler, Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use accesskit_windows::Adapter as PlatformAdapter;
 use std::cell::RefCell;
@@ -7,11 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Console::GetConsoleWindow;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F2, VK_UP};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW,
-    TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, WINDOW_EX_STYLE, WM_APP, WM_GETOBJECT,
+    GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW,
+    WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_GETOBJECT, WM_KEYDOWN, WM_KILLFOCUS, WM_SETFOCUS,
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
@@ -43,13 +47,18 @@ struct WindowState {
     adapter: RefCell<PlatformAdapter>,
     activation: RefCell<LastTree>,
     update_rx: Receiver<Box<dyn FnOnce() -> TreeUpdate + Send>>,
+    event_tx: Sender<AppEvent>,
+}
+
+fn window_state(hwnd: HWND) -> Option<&'static WindowState> {
+    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+    unsafe { ptr.as_ref() }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_GETOBJECT => {
-            let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
-            if let Some(state) = unsafe { state_ptr.as_ref() } {
+            if let Some(state) = window_state(hwnd) {
                 let mut adapter = state.adapter.borrow_mut();
                 let mut activation = state.activation.borrow_mut();
                 if let Some(result) = adapter.handle_wm_getobject(wparam, lparam, &mut *activation) {
@@ -57,9 +66,42 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
         }
+        WM_KEYDOWN => {
+            if let Some(state) = window_state(hwnd) {
+                let key = match VIRTUAL_KEY(wparam.0 as u16) {
+                    VK_UP => Some(Key::Up),
+                    VK_DOWN => Some(Key::Down),
+                    VK_ESCAPE | VK_F2 => Some(Key::Exit),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    let _ = state.event_tx.send(AppEvent::Key(key));
+                    return LRESULT(0);
+                }
+            }
+        }
+        WM_SETFOCUS | WM_KILLFOCUS => {
+            if let Some(state) = window_state(hwnd) {
+                if let Some(events) = state
+                    .adapter
+                    .borrow_mut()
+                    .update_window_focus_state(msg == WM_SETFOCUS)
+                {
+                    events.raise();
+                }
+                return LRESULT(0);
+            }
+        }
+        WM_CLOSE => {
+            // Closing the bridge window means leaving copy-mode; the app
+            // drives the actual teardown so state stays consistent.
+            if let Some(state) = window_state(hwnd) {
+                let _ = state.event_tx.send(AppEvent::Key(Key::Exit));
+            }
+            return LRESULT(0);
+        }
         WM_APP_UPDATE => {
-            let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
-            if let Some(state) = unsafe { state_ptr.as_ref() } {
+            if let Some(state) = window_state(hwnd) {
                 while let Ok(factory) = state.update_rx.try_recv() {
                     let update = factory();
                     *state.activation.borrow().0.lock().unwrap() = update.clone();
@@ -99,12 +141,12 @@ fn create_window() -> HWND {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
-            w!("Accessibility Bridge"),
+            w!("Copy-Mode"),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            0,
-            0,
+            480,
+            160,
             None,
             None,
             Some(instance),
@@ -114,26 +156,18 @@ fn create_window() -> HWND {
     .expect("CreateWindowExW failed")
 }
 
-/// Owns a hidden top-level window created — and message-pumped — by *this*
-/// process, purely so `accesskit_windows` has a real `WndProc` of ours to
-/// intercept `WM_GETOBJECT` on.
+/// Owns a small top-level window created — and message-pumped — by *this*
+/// process, so `accesskit_windows` has a real `WndProc` of ours to intercept
+/// `WM_GETOBJECT` on. (`GetConsoleWindow`'s `HWND` belongs to conhost.exe /
+/// Windows Terminal; Windows never delivers `WM_GETOBJECT` for it to us, and
+/// UIA calls against it deadlocked this process before it ran a message pump.)
 ///
-/// `GetConsoleWindow` (the previous approach) returns an `HWND` owned by
-/// conhost.exe/Windows Terminal — a different process. Windows only ever
-/// delivers `WM_GETOBJECT` to the window procedure the *owning* process
-/// registered, and Win32/UIA calls that expect this thread to service that
-/// foreign window's message queue can deadlock it outright (which is what
-/// froze the app: the adapter blocked waiting on a message pump that never
-/// ran, since the render loop never called `GetMessage`/`DispatchMessage`).
-/// Owning our own window, with our own dedicated `GetMessageW` loop on a
-/// separate thread, avoids both problems.
-///
-/// KNOWN GAP: this window is never shown or focused, so nothing yet makes
-/// a screen reader actually query it instead of the console window it's
-/// already reading natively. That's a separate, still-open problem —
-/// wiring up real AT discovery means either taking over focus/foreground
-/// state explicitly or rendering our own visible surface instead of
-/// relying on conhost, neither of which this change attempts.
+/// The window is shown and takes the foreground while copy-mode is active:
+/// that's what makes screen readers query *our* AccessKit tree (with its text
+/// selection and routing-key handling) instead of reading the console
+/// natively. Copy-mode keys pressed while it has focus (`Up`/`Down`/`Esc`/
+/// `F2`) are forwarded to the app as `AppEvent::Key`; everything else is
+/// ignored. On drop, foreground goes back to the console window.
 pub struct Adapter {
     hwnd: HWND,
     update_tx: Sender<Box<dyn FnOnce() -> TreeUpdate + Send>>,
@@ -141,7 +175,10 @@ pub struct Adapter {
 }
 
 impl Adapter {
-    pub fn new(action_handler: impl ActionHandler + Send + 'static) -> Self {
+    pub fn new(
+        action_handler: impl ActionHandler + Send + 'static,
+        event_tx: Sender<AppEvent>,
+    ) -> Self {
         let (update_tx, update_rx) = channel();
         let (ready_tx, ready_rx) = channel();
 
@@ -152,9 +189,15 @@ impl Adapter {
                 adapter: RefCell::new(PlatformAdapter::new(hwnd, false, action_handler)),
                 activation: RefCell::new(LastTree(Arc::new(Mutex::new(placeholder_tree())))),
                 update_rx,
+                event_tx,
             });
             unsafe {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+            }
+
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                let _ = SetForegroundWindow(hwnd);
             }
 
             ready_tx
@@ -203,6 +246,10 @@ impl Adapter {
 impl Drop for Adapter {
     fn drop(&mut self) {
         unsafe {
+            let console = GetConsoleWindow();
+            if !console.is_invalid() {
+                let _ = SetForegroundWindow(console);
+            }
             let _ = PostMessageW(Some(self.hwnd), WM_APP_SHUTDOWN, WPARAM(0), LPARAM(0));
         }
         if let Some(thread) = self.thread.take() {
