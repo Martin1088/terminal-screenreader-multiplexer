@@ -16,3 +16,7 @@ impl Adapter {
         let _ = update_factory();
     }
 }
+
+/// No tone support off-Windows yet; deliberately silent rather than writing
+/// BEL into the raw-mode output stream from another thread.
+pub fn beep(_freq_hz: u32, _duration_ms: u32) {}

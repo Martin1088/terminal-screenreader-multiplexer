@@ -1,7 +1,15 @@
 pub mod platform;
+mod scan;
+mod tones;
+
+pub use scan::{classify_line, LineClass};
+pub use tones::{
+    Tone, Tones, TONE_ACTIVITY, TONE_BOOKMARK_REMOVED, TONE_BOOKMARK_SET, TONE_ERROR,
+    TONE_LAYER_OFF, TONE_LAYER_ON, TONE_NO_BOOKMARKS, TONE_WARNING,
+};
 
 use accesskit::{
-    Action, ActionData, ActionHandler, ActionRequest, Node, NodeId, Role, TextPosition,
+    Action, ActionData, ActionHandler, ActionRequest, Live, Node, NodeId, Role, TextPosition,
     TextSelection, Tree, TreeId, TreeUpdate,
 };
 use std::sync::mpsc::Sender;
@@ -9,6 +17,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const ROOT: NodeId = NodeId(0);
 const TERM: NodeId = NodeId(1);
+const STATUS: NodeId = NodeId(2);
 const LINE_BASE: u64 = 100; // Zeile i => NodeId(LINE_BASE + i)
 
 pub enum AppEvent {
@@ -24,6 +33,14 @@ pub enum Key {
     Up,
     Down,
     Exit,
+    /// Befehlsebene ein-/ausschalten (F1).
+    ToggleLayer,
+    /// `m` — Lesezeichen auf der Cursorzeile setzen/entfernen (nur Befehlsebene).
+    ToggleBookmark,
+    /// `n` — zum nächsten Lesezeichen springen (nur Befehlsebene).
+    NextBookmark,
+    /// `p` — zum vorherigen Lesezeichen springen (nur Befehlsebene).
+    PrevBookmark,
 }
 
 /// Translates AccessKit `ActionRequest`s (routing-key presses, forwarded by
@@ -90,6 +107,7 @@ impl A11y {
         lines: &[String],
         cursor_line: usize,
         cursor_col: usize,
+        status: &str,
     ) -> TreeUpdate {
         let mut term = Node::new(Role::Terminal);
         term.set_children((0..lines.len()).map(Self::line_id).collect::<Vec<_>>());
@@ -103,10 +121,16 @@ impl A11y {
             focus: pos,
         });
 
-        let mut root = Node::new(Role::Window);
-        root.set_children(vec![TERM]);
+        // Höfliche Live-Region: Wertänderungen (Lesezeichen, Befehlsebene …)
+        // werden vom Screenreader angesagt, ohne den Fokus zu bewegen.
+        let mut status_node = Node::new(Role::Status);
+        status_node.set_value(status.to_string());
+        status_node.set_live(Live::Polite);
 
-        let mut nodes = vec![(ROOT, root), (TERM, term)];
+        let mut root = Node::new(Role::Window);
+        root.set_children(vec![TERM, STATUS]);
+
+        let mut nodes = vec![(ROOT, root), (TERM, term), (STATUS, status_node)];
         nodes.extend(
             lines
                 .iter()
@@ -122,8 +146,14 @@ impl A11y {
         }
     }
 
-    pub fn on_cursor_moved(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
-        let update = self.build_update(lines, cursor_line, cursor_col);
+    pub fn update(
+        &mut self,
+        lines: &[String],
+        cursor_line: usize,
+        cursor_col: usize,
+        status: &str,
+    ) {
+        let update = self.build_update(lines, cursor_line, cursor_col, status);
         self.adapter.update_if_active(|| update);
     }
 }

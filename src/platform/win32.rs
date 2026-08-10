@@ -9,8 +9,11 @@ use std::thread::JoinHandle;
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Console::GetConsoleWindow;
+use windows::Win32::System::Diagnostics::Debug::Beep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F2, VK_UP};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_M, VK_N, VK_P, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
@@ -72,6 +75,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     VK_UP => Some(Key::Up),
                     VK_DOWN => Some(Key::Down),
                     VK_ESCAPE | VK_F2 => Some(Key::Exit),
+                    VK_F1 => Some(Key::ToggleLayer),
+                    VK_M => Some(Key::ToggleBookmark),
+                    VK_N => Some(Key::NextBookmark),
+                    VK_P => Some(Key::PrevBookmark),
                     _ => None,
                 };
                 if let Some(key) = key {
@@ -166,8 +173,9 @@ fn create_window() -> HWND {
 /// that's what makes screen readers query *our* AccessKit tree (with its text
 /// selection and routing-key handling) instead of reading the console
 /// natively. Copy-mode keys pressed while it has focus (`Up`/`Down`/`Esc`/
-/// `F2`) are forwarded to the app as `AppEvent::Key`; everything else is
-/// ignored. On drop, foreground goes back to the console window.
+/// `F2`, plus `F1` and the command-layer keys `m`/`n`/`p`) are forwarded to
+/// the app as `AppEvent::Key`; everything else is ignored. On drop,
+/// foreground goes back to the console window.
 pub struct Adapter {
     hwnd: HWND,
     update_tx: Sender<Box<dyn FnOnce() -> TreeUpdate + Send>>,
@@ -240,6 +248,15 @@ impl Adapter {
                 let _ = PostMessageW(Some(self.hwnd), WM_APP_UPDATE, WPARAM(0), LPARAM(0));
             }
         }
+    }
+}
+
+/// Blocking beep (up to `duration_ms`); only ever call from a dedicated
+/// audio thread (see `crate::tones::Tones`), never from the render loop or
+/// the bridge window's message pump.
+pub fn beep(freq_hz: u32, duration_ms: u32) {
+    unsafe {
+        let _ = Beep(freq_hz, duration_ms);
     }
 }
 
