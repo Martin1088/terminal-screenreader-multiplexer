@@ -81,7 +81,13 @@ fn main() -> std::io::Result<()> {
         execute!(stdout, MoveTo(mode.cursor_col as u16, cursor_row), Show)?;
         stdout.flush()?;
 
-        a11y.update(&lines, mode.cursor_line, mode.cursor_col, &mode.status);
+        a11y.update(
+            &lines,
+            mode.cursor_line,
+            mode.cursor_col,
+            mode.selection_anchor,
+            &mode.status,
+        );
 
         // Terminal input still works when the console has focus (and is the
         // only path on non-Windows); with the bridge window focused, keys
@@ -94,6 +100,8 @@ fn main() -> std::io::Result<()> {
                 KeyCode::Up => Some(Key::Up),
                 KeyCode::Esc | KeyCode::F(2) => Some(Key::Exit),
                 KeyCode::F(1) => Some(Key::Prefix),
+                KeyCode::Char(' ') => Some(Key::StartSelection),
+                KeyCode::Enter => Some(Key::Copy),
                 KeyCode::Char('m' | 'M') => Some(Key::ToggleBookmark),
                 KeyCode::Char('n' | 'N') => Some(Key::NextBookmark),
                 KeyCode::Char('p' | 'P') => Some(Key::PrevBookmark),

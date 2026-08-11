@@ -20,3 +20,9 @@ impl Adapter {
 /// No tone support off-Windows yet; deliberately silent rather than writing
 /// BEL into the raw-mode output stream from another thread.
 pub fn beep(_freq_hz: u32, _duration_ms: u32) {}
+
+/// No real clipboard off-Windows yet; reports success so the copy path
+/// (status text, anchor reset) behaves the same in tests as on Windows.
+pub fn set_clipboard(_text: &str) -> bool {
+    true
+}

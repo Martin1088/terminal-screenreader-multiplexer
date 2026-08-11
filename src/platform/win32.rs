@@ -7,12 +7,17 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use windows::core::w;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Console::GetConsoleWindow;
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
 use windows::Win32::System::Diagnostics::Debug::Beep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_M, VK_N, VK_P, VK_UP,
+    VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_M, VK_N, VK_P, VK_RETURN, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
@@ -84,6 +89,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     VK_DOWN => Some(Key::Down),
                     VK_ESCAPE | VK_F2 => Some(Key::Exit),
                     VK_F1 => Some(Key::Prefix),
+                    VK_SPACE => Some(Key::StartSelection),
+                    VK_RETURN => Some(Key::Copy),
                     VK_M => Some(Key::ToggleBookmark),
                     VK_N => Some(Key::NextBookmark),
                     VK_P => Some(Key::PrevBookmark),
@@ -272,6 +279,33 @@ impl Adapter {
 pub fn beep(freq_hz: u32, duration_ms: u32) {
     unsafe {
         let _ = Beep(freq_hz, duration_ms);
+    }
+}
+
+/// Puts `text` on the Windows clipboard as CF_UNICODETEXT. Returns false if
+/// the clipboard is unavailable (some other app holds it open).
+pub fn set_clipboard(text: &str) -> bool {
+    let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return false;
+        }
+        let ok = (|| {
+            EmptyClipboard().ok()?;
+            let hmem = GlobalAlloc(GMEM_MOVEABLE, utf16.len() * 2).ok()?;
+            let ptr = GlobalLock(hmem) as *mut u16;
+            if ptr.is_null() {
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr, utf16.len());
+            let _ = GlobalUnlock(hmem);
+            // Nach Erfolg gehört der Speicher dem System, nicht mehr uns.
+            SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))).ok()?;
+            Some(())
+        })()
+        .is_some();
+        let _ = CloseClipboard();
+        ok
     }
 }
 

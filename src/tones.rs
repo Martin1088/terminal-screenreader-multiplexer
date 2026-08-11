@@ -23,7 +23,10 @@ pub const TONE_PREFIX_ARMED: &[Tone] = &[t(1319, 50)];
 pub const TONE_PREFIX_CANCELLED: &[Tone] = &[t(659, 50)];
 pub const TONE_BOOKMARK_SET: &[Tone] = &[t(1047, 60)];
 pub const TONE_BOOKMARK_REMOVED: &[Tone] = &[t(523, 60)];
-pub const TONE_NO_BOOKMARKS: &[Tone] = &[t(330, 80)];
+/// "Nichts da": keine Lesezeichen, keine Auswahl, Zwischenablage-Fehler.
+pub const TONE_EMPTY: &[Tone] = &[t(330, 80)];
+pub const TONE_SELECT: &[Tone] = &[t(784, 50)];
+pub const TONE_COPY: &[Tone] = &[t(1568, 60)];
 
 /// Plays tone sequences on a dedicated thread, since the underlying
 /// platform beep blocks for the tone's duration and must never stall the

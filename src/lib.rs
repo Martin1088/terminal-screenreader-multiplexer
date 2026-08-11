@@ -6,8 +6,8 @@ mod tones;
 pub use copy_mode::CopyMode;
 pub use scan::{classify_line, LineClass};
 pub use tones::{
-    Tone, Tones, TONE_ACTIVITY, TONE_BOOKMARK_REMOVED, TONE_BOOKMARK_SET, TONE_ERROR,
-    TONE_NO_BOOKMARKS, TONE_PREFIX_ARMED, TONE_PREFIX_CANCELLED, TONE_WARNING,
+    Tone, Tones, TONE_ACTIVITY, TONE_BOOKMARK_REMOVED, TONE_BOOKMARK_SET, TONE_COPY, TONE_EMPTY,
+    TONE_ERROR, TONE_PREFIX_ARMED, TONE_PREFIX_CANCELLED, TONE_SELECT, TONE_WARNING,
 };
 
 use accesskit::{
@@ -37,6 +37,10 @@ pub enum Key {
     Exit,
     /// Präfix-Taste (F1, tmux-Stil): die nächste Taste ist ein Befehl.
     Prefix,
+    /// Leertaste — Auswahl-Anker auf der Cursorposition setzen (tmux-Stil).
+    StartSelection,
+    /// Enter — Auswahl in die Zwischenablage kopieren.
+    Copy,
     /// `m` — Lesezeichen auf der Cursorzeile setzen/entfernen (nach Präfix).
     ToggleBookmark,
     /// `n` — zum nächsten Lesezeichen springen (nach Präfix).
@@ -109,18 +113,25 @@ impl A11y {
         lines: &[String],
         cursor_line: usize,
         cursor_col: usize,
+        selection_anchor: Option<(usize, usize)>,
         status: &str,
     ) -> TreeUpdate {
         let mut term = Node::new(Role::Terminal);
         term.set_children((0..lines.len()).map(Self::line_id).collect::<Vec<_>>());
 
-        let pos = TextPosition {
+        let focus_pos = TextPosition {
             node: Self::line_id(cursor_line),
             character_index: cursor_col,
         };
+        // Aktive Auswahl: Anker bleibt stehen, Fokus wandert mit dem Cursor —
+        // Screenreader sagen den markierten Text beim Erweitern an.
+        let anchor_pos = selection_anchor.map_or(focus_pos, |(line, col)| TextPosition {
+            node: Self::line_id(line),
+            character_index: col,
+        });
         term.set_text_selection(TextSelection {
-            anchor: pos,
-            focus: pos,
+            anchor: anchor_pos,
+            focus: focus_pos,
         });
 
         // Höfliche Live-Region: Wertänderungen (Lesezeichen, Befehlsebene …)
@@ -153,9 +164,10 @@ impl A11y {
         lines: &[String],
         cursor_line: usize,
         cursor_col: usize,
+        selection_anchor: Option<(usize, usize)>,
         status: &str,
     ) {
-        let update = self.build_update(lines, cursor_line, cursor_col, status);
+        let update = self.build_update(lines, cursor_line, cursor_col, selection_anchor, status);
         self.adapter.update_if_active(|| update);
     }
 }

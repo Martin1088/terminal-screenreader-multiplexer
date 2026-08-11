@@ -189,6 +189,90 @@ fn bookmark_jumps_wrap_in_both_directions() {
 }
 
 #[test]
+fn selection_same_line_inclusive_of_both_ends() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = vec!["Zeile äöü eins".to_string(), "Zeile zwei".to_string()];
+
+    mode.move_cursor(0, 6, &lines, &tones);
+    mode.apply_key(Key::StartSelection, &lines, &tones);
+    assert_eq!(mode.status, "Auswahl gestartet");
+    mode.move_cursor(0, 8, &lines, &tones);
+
+    // Graphem-Spalten 6..=8 sind "äöü", auch mit Mehrbyte-Zeichen.
+    assert_eq!(mode.selected_text(&lines).as_deref(), Some("äöü"));
+}
+
+#[test]
+fn selection_spans_lines_and_direction_does_not_matter() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = vec![
+        "erste Zeile".to_string(),
+        "mittlere Zeile".to_string(),
+        "letzte Zeile".to_string(),
+    ];
+
+    // Rückwärts markieren: Anker unten, Cursor wandert nach oben.
+    mode.move_cursor(2, 5, &lines, &tones);
+    mode.apply_key(Key::StartSelection, &lines, &tones);
+    mode.move_cursor(0, 6, &lines, &tones);
+
+    assert_eq!(
+        mode.selected_text(&lines).as_deref(),
+        Some("Zeile\nmittlere Zeile\nletzte")
+    );
+}
+
+#[test]
+fn escape_cancels_selection_before_exiting() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = lines(5);
+
+    mode.apply_key(Key::StartSelection, &lines, &tones);
+    mode.apply_key(Key::Exit, &lines, &tones);
+    assert!(mode.running, "Esc mit Auswahl darf Copy-Mode nicht beenden");
+    assert!(mode.selection_anchor.is_none());
+    assert_eq!(mode.status, "Auswahl aufgehoben");
+
+    mode.apply_key(Key::Exit, &lines, &tones);
+    assert!(!mode.running);
+}
+
+#[test]
+fn copy_without_selection_reports_status() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = lines(5);
+
+    mode.apply_key(Key::Copy, &lines, &tones);
+    assert_eq!(mode.status, "Keine Auswahl");
+}
+
+#[test]
+fn copy_clears_anchor_and_reports_line_count() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = lines(5);
+
+    mode.apply_key(Key::StartSelection, &lines, &tones);
+    mode.move_cursor(2, 0, &lines, &tones);
+    mode.apply_key(Key::Copy, &lines, &tones);
+
+    // Die Stub-Zwischenablage meldet Erfolg, daher der Kopiert-Status.
+    assert_eq!(mode.status, "Kopiert: 3 Zeilen");
+    assert!(mode.selection_anchor.is_none());
+}
+
+#[test]
+fn selection_keys_cancel_an_armed_prefix() {
+    let (mut mode, tones) = mode_and_tones(20);
+    let lines = lines(5);
+
+    mode.apply_key(Key::Prefix, &lines, &tones);
+    mode.apply_key(Key::StartSelection, &lines, &tones);
+    assert!(!mode.prefix_armed);
+    assert!(mode.selection_anchor.is_none());
+    assert_eq!(mode.status, "Präfix abgebrochen");
+}
+
+#[test]
 fn bookmark_jump_without_bookmarks_reports_status() {
     let (mut mode, tones) = mode_and_tones(20);
     let lines = lines(5);
