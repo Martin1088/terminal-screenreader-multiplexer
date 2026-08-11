@@ -60,11 +60,19 @@ fn window_state(hwnd: HWND) -> Option<&'static WindowState> {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        // Converting the result to an LRESULT calls into UIA, which can
+        // synchronously send a nested WM_GETOBJECT back into this WndProc
+        // (JAWS does this on ShowWindow). Same for QueuedEvents::raise below.
+        // No RefCell borrow may be live across either call, or the nested
+        // entry panics with "RefCell already borrowed" and aborts.
         WM_GETOBJECT => {
             if let Some(state) = window_state(hwnd) {
-                let mut adapter = state.adapter.borrow_mut();
-                let mut activation = state.activation.borrow_mut();
-                if let Some(result) = adapter.handle_wm_getobject(wparam, lparam, &mut *activation) {
+                let result = {
+                    let mut adapter = state.adapter.borrow_mut();
+                    let mut activation = state.activation.borrow_mut();
+                    adapter.handle_wm_getobject(wparam, lparam, &mut *activation)
+                };
+                if let Some(result) = result {
                     return result.into();
                 }
             }
@@ -89,11 +97,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_SETFOCUS | WM_KILLFOCUS => {
             if let Some(state) = window_state(hwnd) {
-                if let Some(events) = state
+                let events = state
                     .adapter
                     .borrow_mut()
-                    .update_window_focus_state(msg == WM_SETFOCUS)
-                {
+                    .update_window_focus_state(msg == WM_SETFOCUS);
+                if let Some(events) = events {
                     events.raise();
                 }
                 return LRESULT(0);
@@ -112,7 +120,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 while let Ok(factory) = state.update_rx.try_recv() {
                     let update = factory();
                     *state.activation.borrow().0.lock().unwrap() = update.clone();
-                    if let Some(events) = state.adapter.borrow_mut().update_if_active(|| update) {
+                    let events = state.adapter.borrow_mut().update_if_active(|| update);
+                    if let Some(events) = events {
                         events.raise();
                     }
                 }
