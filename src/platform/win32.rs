@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
     SetWindowLongPtrW, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, MSG, SW_SHOW,
     WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_GETOBJECT, WM_KEYDOWN, WM_KILLFOCUS, WM_SETFOCUS,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WNDCLASSEXW, WS_POPUP,
 };
 
 const WM_APP_UPDATE: u32 = WM_APP + 1;
@@ -153,16 +153,18 @@ fn create_window() -> HWND {
     let atom = unsafe { RegisterClassExW(&wc) };
     assert_ne!(atom, 0, "RegisterClassExW failed");
 
+    // Borderless and 2x2 px: the window only exists to hold keyboard focus
+    // and answer UIA queries, so it should not visually cover the terminal.
     unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
             w!("Copy-Mode"),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            480,
-            160,
+            WS_POPUP,
+            0,
+            0,
+            2,
+            2,
             None,
             None,
             Some(instance),
