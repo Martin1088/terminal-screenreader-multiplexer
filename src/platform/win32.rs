@@ -208,8 +208,10 @@ impl Adapter {
                 let _ = SetForegroundWindow(hwnd);
             }
 
+            // HWND wraps a raw pointer and so isn't Send; the handle value
+            // itself is process-global, so it crosses as an integer.
             ready_tx
-                .send(hwnd)
+                .send(hwnd.0 as isize)
                 .expect("adapter constructor dropped its ready channel");
 
             let mut msg = MSG::default();
@@ -231,9 +233,11 @@ impl Adapter {
             }
         });
 
-        let hwnd = ready_rx
-            .recv()
-            .expect("accessibility window thread failed to start");
+        let hwnd = HWND(
+            ready_rx
+                .recv()
+                .expect("accessibility window thread failed to start") as *mut core::ffi::c_void,
+        );
 
         Self {
             hwnd,
